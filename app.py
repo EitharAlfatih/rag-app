@@ -2,8 +2,9 @@ import streamlit as st
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
-from langchain.chains import ConversationalRetrievalChain
 from langchain_community.document_loaders import PyPDFLoader
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 import tempfile
 import os
@@ -63,11 +64,17 @@ if uploaded_file and api_key:
     # Chat interface
     if st.session_state.vectorstore:
         llm = ChatOpenAI(model="gpt-4o-mini", api_key=api_key)
-        chain = ConversationalRetrievalChain.from_llm(
-            llm=llm,
-            retriever=st.session_state.vectorstore.as_retriever(),
-            return_source_documents=True
-        )
+        retriever = st.session_state.vectorstore.as_retriever()
+        
+        prompt = ChatPromptTemplate.from_template("""
+Answer the question based on the context below. If you cannot answer, say "I don't know."
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:""")
         
         # Display chat history
         for msg in st.session_state.chat_history:
@@ -82,15 +89,14 @@ if uploaded_file and api_key:
             
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
-                    # Format history for the chain
-                    history = [(h["content"], st.session_state.chat_history[i+1]["content"]) 
-                               for i, h in enumerate(st.session_state.chat_history[:-1:2])]
+                    # Retrieve relevant docs
+                    docs = retriever.invoke(question)
+                    context = "\n\n".join([doc.page_content for doc in docs])
                     
-                    response = chain.invoke({
-                        "question": question,
-                        "chat_history": history
-                    })
-                    answer = response["answer"]
+                    # Generate answer
+                    chain = prompt | llm | StrOutputParser()
+                    answer = chain.invoke({"context": context, "question": question})
+                    
                     st.write(answer)
                     st.session_state.chat_history.append({"role": "assistant", "content": answer})
 
